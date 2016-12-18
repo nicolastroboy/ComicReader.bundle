@@ -43,35 +43,25 @@ class State(object):
     UNREAD = 1
     IN_PROGRESS = 2
 
+    
+class Icon(object):
+    READ = '●'
+    UNREAD = '○'
+    IN_PROGRESS = '◐'
+
 
 def thumb_transcode(url, w=150, h=150):
     """use the PMS photo transcoder for thumbnails"""
     return '/photo/:/transcode?url={}&height={}&width={}&maxSize=1'.format(String.Quote(url), w, h)
 
 
-def decorate_title(archive, user, state, title):
+def decorate(user, state, title):
     if state == State.UNREAD:
-        indicator = Prefs['unread_symbol']
+        indicator = Icon.UNREAD
     elif state == State.IN_PROGRESS:
-        cur, total = DATABASE.get_page_state(user, archive)
-        if cur <= 0 or total <= 0:
-            indicator = Prefs['in_progress_symbol']
-        else:
-            indicator = '{} [{}/{}]'.format(Prefs['in_progress_symbol'], cur, total)
+        indicator = Icon.IN_PROGRESS
     elif state == State.READ:
-        indicator = Prefs['read_symbol']
-    else:
-        return title
-    return '{} {}'.format('' if indicator is None else indicator.strip(), title)
-
-
-def decorate_directory(user, state, title):
-    if state == State.UNREAD:
-        indicator = Prefs['unread_symbol']
-    elif state == State.IN_PROGRESS:
-        indicator = Prefs['in_progress_symbol']
-    elif state == State.READ:
-        indicator = Prefs['read_symbol']
+        indicator = Icon.READ
     else:
         return title
     return '{} {}'.format('' if indicator is None else indicator.strip(), title)
@@ -98,7 +88,7 @@ def filtered_listdir(directory):
         if x.startswith('.') or x == 'lost+found':
             continue
         if os.path.isdir(os.path.join(udir, x)):
-            l = dirs if bool(Prefs['dirs_first']) else comics
+            l = comics
             l.append((x, True))
         elif splitext(x)[-1] in archives.FORMATS:
             comics.append((x, False))

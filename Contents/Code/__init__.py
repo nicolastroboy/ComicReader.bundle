@@ -15,12 +15,12 @@ import utils
 import archives
 from db import DATABASE, test_token
 
-NAME = 'ComicReader'
-PREFIX = '/photos/comicreader'
+NAME = 'Comics'
+PREFIX = '/photos/comics'
 
 
 def error_message(error, message):
-    Log.Error("ComicReader: {} - {}".format(error, message))
+    Log.Error("Comics: {} - {}".format(error, message))
     return MessageContainer(header=unicode(error), message=unicode(message))
 
 
@@ -38,39 +38,6 @@ def DbClean():
     return utils.JSONResponse(JSON.StringFromObject(DATABASE.clean_states()))
 
 
-@route(PREFIX + '/users')
-def Users():
-    oc = ObjectContainer(no_cache=True)
-    for username in DATABASE.usernames():
-        oc.add(DirectoryObject(key=Callback(SwitchUser, new_username=username),
-                               title='Switch to: {}'.format(username),
-                               thumb=R('icon-default.png')))
-
-    oc.add(DirectoryObject(key=Callback(ClearUsers), title='Clear username cache.',
-                           thumb=R('icon-default.png')))
-    oc.add(DirectoryObject(key=Callback(RefreshUser), title='Refresh User.',
-                           thumb=R('icon-default.png')))
-    return oc
-
-
-@route(PREFIX + '/users/refresh')
-def RefreshUser():
-    DATABASE.get_user(Request.Headers.get('X-Plex-Token', 'default'), force=True)
-    return error_message('refreshed user', 'refreshed user')
-
-
-@route(PREFIX + '/users/clear')
-def ClearUsers():
-    DATABASE.clear_usernames()
-    return error_message('cleared cache', 'cleared cache')
-
-
-@route(PREFIX + '/users/switch')
-def SwitchUser(new_username):
-    DATABASE.switch_user(Request.Headers.get('X-Plex-Token', 'default'), new_username)
-    return error_message('changed user', 'changed user')
-
-
 @handler(PREFIX, NAME)
 def MainMenu():
     DATABASE.ensure_keys()
@@ -82,13 +49,10 @@ def MainMenu():
     user = DATABASE.get_user(Request.Headers.get('X-Plex-Token', 'default'))
     Log.Info('USER: {}'.format(user))
 
-    oc = ObjectContainer(title2=unicode(user), no_cache=True)
+    oc = ObjectContainer(title2=unicode(L('root_title')), no_cache=True)
 
     if bool(Prefs['update']):
         Updater(PREFIX + '/updater', oc)
-
-    oc.add(DirectoryObject(key=Callback(Users), title='Hello {}. Switch User?'.format(user),
-                           thumb=R('icon-default.png')))
 
     browse_dir = BrowseDir(Prefs['cb_path'], page_size=int(Prefs['page_size']), user=user)
     if not hasattr(browse_dir, 'objects'):
@@ -111,27 +75,21 @@ def BrowseDir(cur_dir, page_size=20, offset=0, user=None):
         Log.Error('BrowseDir: {}, cur_dir={}, page_size={}, offset={}, user={}'.format(
             e, cur_dir, page_size, offset, user))
         return error_message('bad path', 'bad path')
-
-    # Read/Unread toggle
-    if os.path.abspath(cur_dir) != os.path.abspath(Prefs['cb_path']):
-        oc.add(DirectoryObject(title=unicode(L('mark_all_read')), thumb=R('mark-read.png'),
-                                key=Callback(Confirmation, f='MarkReadDir', action=L('mark_all_read'), user=user, path=cur_dir)))
-        oc.add(DirectoryObject(title=unicode(L('mark_all_unread')), thumb=R('mark-unread.png'),
-                                key=Callback(Confirmation, f='MarkUnreadDir', action=L('mark_all_unread'), user=user, path=cur_dir)))        
+     
     for item, is_dir in page:
         full_path = os.path.join(cur_dir, item)
         if is_dir:
             state = DATABASE.dir_read_state(user, full_path)
             oc.add(DirectoryObject(
                 key=Callback(BrowseDir, cur_dir=full_path, page_size=page_size, user=user),
-                title=unicode(utils.decorate_directory(user, state, item)),
+                title=unicode(utils.decorate(user, state, item)),
                 thumb=R('folder.png')))
         else:
             state = DATABASE.comic_read_state(user, full_path)
             title = os.path.splitext(item)[0]
             oc.add(DirectoryObject(
                 key=Callback(ComicMenu, archive_path=full_path, title=title, user=user),
-                title=unicode(utils.decorate_title(full_path, user, state, title)),
+                title=unicode(utils.decorate(user, state, title)),
                 thumb=utils.thumb_transcode(Callback(get_cover, archive_path=full_path))))
 
     if offset + page_size < len(dir_list):
@@ -145,20 +103,20 @@ def BrowseDir(cur_dir, page_size=20, offset=0, user=None):
 @route(PREFIX + '/comic/menu', archive_path=unicode)
 def ComicMenu(archive_path, title, user=None):
     """The 'main menu' for a comic. this allows for different functions to be added."""
-    oc = ObjectContainer(title2=unicode(os.path.basename(archive_path)), no_cache=True)
+    oc = ObjectContainer(title2=unicode(utils.splitext(os.path.basename(archive_path))[0]), no_cache=True)
     state = DATABASE.comic_read_state(user, archive_path)
+    cur, total = DATABASE.get_page_state(user, archive_path)
     # Full comic
     oc.add(PhotoAlbumObject(
-        key=Callback(Comic, archive_path=archive_path, user=user),
+        key=Callback(Comic, archive_path=archive_path, user=user, page=0, page_total=total),
         rating_key=hashlib.md5(archive_path).hexdigest(),
-        title=unicode(utils.decorate_title(archive_path, user, state, title)),
+        title=unicode(L('read')),
         thumb=utils.thumb_transcode(Callback(get_cover, archive_path=archive_path))))
     # Resume
     if state == utils.State.IN_PROGRESS:
-        cur, total = DATABASE.get_page_state(user, archive_path)
         if cur > 0:
             oc.add(PhotoAlbumObject(title=unicode(L('resume')), thumb=R('resume.png'),
-                                    key=Callback(Comic, archive_path=archive_path, user=user, page=cur),
+                                    key=Callback(Comic, archive_path=archive_path, user=user, page=cur, page_total=total),
                                     rating_key=hashlib.md5('{}{}'.format(archive_path, cur)).hexdigest()))
     # Read/Unread toggle
     if state == utils.State.UNREAD or state == utils.State.IN_PROGRESS:
@@ -171,48 +129,32 @@ def ComicMenu(archive_path, title, user=None):
 
 
 @route(PREFIX + '/comic', archive_path=unicode, page=int)
-def Comic(archive_path, user=None, page=0):
+def Comic(archive_path, user=None, page=0, page_total=0):
     """Return an oc with all pages in archive_path. if page > 0 return pages [page - Prefs['resume_length']:]"""
-    oc = ObjectContainer(title2=unicode(os.path.basename(archive_path)), no_cache=True)
+    oc = ObjectContainer(title2=unicode(utils.splitext(os.path.basename(archive_path))[0]), no_cache=True)
     try:
         archive = archives.get_archive(archive_path)
     except archives.ArchiveError as e:
         Log.Error(e)
         return error_message('bad archive', 'unable to open archive: {}'.format(archive_path))
+    current_page = 0
     for f in utils.sorted_nicely(archive.namelist()):
         page_title, ext = utils.splitext(f)
         if not ext or ext not in utils.IMAGE_FORMATS:
             continue
-        decoration = None
-        if page > 0:
-            m = utils.PAGE_NUM_REGEX.search(f)
-            if m:
-                page_num = int(m.group(1))
-                if page_num < page - int(Prefs['resume_length']):
-                    continue
-                if page_num <= page:
-                    decoration = '>'
-        page_title = utils.basename(page_title)
-        if decoration is not None:
-            page_title = '{} {}'.format(decoration, page_title)
-
-        if type(page_title) != unicode:
-            try:
-                page_title = page_title.decode('cp437')
-            except Exception:
-                try:
-                    page_title = unicode(page_title, errors='replace')
-                except Exception:
-                    pass
-
+        current_page = current_page + 1
+        if page > 0:                
+            if current_page <= page - int(Prefs['resume_length']):
+                continue
+        page_title = str(current_page) + "/" + str(page_total)
         oc.add(CreatePhotoObject(
             media_key=Callback(GetImage, archive_path=String.Encode(archive_path),
-                               filename=String.Encode(f), user=user, extension=ext.lstrip('.'),
-                               time=int(time.time()) if bool(Prefs['prevent_caching']) else 0),
+                           filename=String.Encode(f), user=user, extension=ext.lstrip('.'),
+                           time=int(time.time()) if bool(Prefs['prevent_caching']) else 0),
             rating_key=hashlib.sha1('{}{}{}'.format(archive_path, f, user)).hexdigest(),
             title=page_title,
             thumb=utils.thumb_transcode(Callback(get_thumb, archive_path=archive_path,
-                                                 filename=f))))
+                                             filename=f))))
     return oc
 
 
@@ -220,27 +162,27 @@ def Comic(archive_path, user=None, page=0):
 def MarkRead(user, archive_path):
     Log.Info('Mark read. {} a={}'.format(user, archive_path))
     DATABASE.mark_read(user, archive_path)
-    return error_message('marked', 'marked')
+    return error_message(unicode(L('marked')), unicode(L('marked')))
 
 
 @route(PREFIX + '/markunread')
 def MarkUnread(user, archive_path):
     Log.Info('Mark unread. a={}'.format(archive_path))
     DATABASE.mark_unread(user, archive_path)
-    return error_message('marked', 'marked')
+    return error_message(unicode(L('marked')), unicode(L('marked')))
 
 @route(PREFIX + '/markreaddir')
 def MarkReadDir(user, path):
     Log.Info('Mark read. {} a={}'.format(user, path))
     DATABASE.mark_read_dir(user, path)
-    return error_message('marked', 'marked')
+    return error_message(unicode(L('marked')), unicode(L('marked')))
 
 
 @route(PREFIX + '/markunreaddir')
 def MarkUnreadDir(user, path):
     Log.Info('Mark unread. a={}'.format(path))
     DATABASE.mark_unread_dir(user, path)
-    return error_message('marked', 'marked')
+    return error_message(unicode(L('marked')), unicode(L('marked')))
 
 @route(PREFIX + '/confirm')
 def Confirmation(f, action, **kwargs):
